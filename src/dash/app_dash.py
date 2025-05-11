@@ -92,6 +92,8 @@ app.layout = html.Div([
 def update_surface(tipo, fecha):
     df_actualizado = cargar_datos_desde_api()
     df_filtrado = df_actualizado[(df_actualizado['tipo'] == tipo) & (df_actualizado['fecha'] == fecha)]
+    df_filtrado = df_filtrado[df_filtrado["σ"] > 1.0]
+
     if df_filtrado.empty:
         return go.Figure(), html.Div("⚠️ No hay datos para la combinación seleccionada.")
 

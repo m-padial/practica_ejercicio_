@@ -6,7 +6,7 @@ import plotly.graph_objs as go
 import os
 import requests
 
-# --- 1. Cargar datos desde FastAPI
+# --- 1. Conexión a la API FastAPI
 API_URL = os.environ.get("API_URL", "https://<tu-app-runner>.awsapprunner.com")
 
 def cargar_datos_desde_api():
@@ -29,60 +29,58 @@ def cargar_datos_desde_api():
         print(f"❌ Error accediendo a la API: {e}")
         return pd.DataFrame()
 
-df_resultado = cargar_datos_desde_api()
-tipos_opcion = ['Call', 'Put']
-fechas_disponibles = sorted(df_resultado["fecha"].dropna().unique())
-
 # --- 2. Inicializar Dash
 app = dash.Dash(__name__)
 server = app.server
 app.title = "Superficie de Volatilidad - MINI IBEX"
 
-vencimientos = sorted(df_resultado["vencimiento"].dropna().unique())
+# --- 3. Layout dinámico para actualizar fechas y tipo
+def serve_layout():
+    df = cargar_datos_desde_api()
+    fechas_disponibles = sorted(df["fecha"].dropna().unique())
 
-# --- 3. Layout
-# --- 3. Layout
-app.layout = html.Div([
-    html.H1("📊 Superficie de Volatilidad - MINI IBEX", style={"textAlign": "center"}),
+    return html.Div([
+        html.H1("📊 Superficie de Volatilidad - MINI IBEX", style={"textAlign": "center"}),
 
-    html.Div([
-        html.Label("Tipo de opción:", style={'fontWeight': 'bold'}),
-        dcc.Dropdown(
-            id='tipo-dropdown',
-            options=[{'label': tipo, 'value': tipo} for tipo in tipos_opcion],
-            value='Call',
-            style={'marginBottom': '15px'}
-        ),
+        html.Div([
+            html.Label("Tipo de opción:", style={'fontWeight': 'bold'}),
+            dcc.Dropdown(
+                id='tipo-dropdown',
+                options=[{'label': tipo, 'value': tipo} for tipo in ['Call', 'Put']],
+                value='Call',
+                style={'marginBottom': '15px'}
+            ),
 
-        html.Label("Fecha de datos:", style={'fontWeight': 'bold'}),
-        dcc.Dropdown(
-            id='fecha-dropdown',
-            options=[{'label': f, 'value': f} for f in fechas_disponibles],
-            value=fechas_disponibles[-1] if fechas_disponibles else None
-        )
-    ], style={
-        'width': '40%',
-        'margin': '0 auto 30px auto',
-        'backgroundColor': '#ffffff',
-        'padding': '20px',
-        'borderRadius': '10px',
-        'boxShadow': '0 2px 8px rgba(0,0,0,0.1)'
-    }),
+            html.Label("Fecha de datos:", style={'fontWeight': 'bold'}),
+            dcc.Dropdown(
+                id='fecha-dropdown',
+                options=[{'label': f, 'value': f} for f in fechas_disponibles],
+                value=fechas_disponibles[-1] if fechas_disponibles else None
+            )
+        ], style={
+            'width': '40%',
+            'margin': '0 auto 30px auto',
+            'backgroundColor': '#ffffff',
+            'padding': '20px',
+            'borderRadius': '10px',
+            'boxShadow': '0 2px 8px rgba(0,0,0,0.1)'
+        }),
 
-    dcc.Graph(id='vol-surface-graph', style={'height': '700px'}),
+        dcc.Graph(id='vol-surface-graph', style={'height': '700px'}),
 
-    html.Div(id='data-table', style={
-        'width': '90%',
-        'margin': '30px auto',
-        'backgroundColor': '#ffffff',
-        'padding': '20px',
-        'borderRadius': '10px',
-        'boxShadow': '0 2px 8px rgba(0,0,0,0.1)'
-    })
-])
+        html.Div(id='data-table', style={
+            'width': '90%',
+            'margin': '30px auto',
+            'backgroundColor': '#ffffff',
+            'padding': '20px',
+            'borderRadius': '10px',
+            'boxShadow': '0 2px 8px rgba(0,0,0,0.1)'
+        })
+    ])
 
+app.layout = serve_layout
 
-# --- 4. Callback
+# --- 4. Callback para actualizar gráfica y tabla
 @app.callback(
     Output('vol-surface-graph', 'figure'),
     Output('data-table', 'children'),
@@ -97,23 +95,17 @@ def update_surface(tipo, fecha):
     if df_filtrado.empty:
         return go.Figure(), html.Div("⚠️ No hay datos para la combinación seleccionada.")
 
-    strikes = sorted(df_filtrado["strike"].dropna().unique())
-    vencimientos = sorted(df_filtrado["vencimiento"].dropna().unique())
+    # Crear matriz con pivot_table
+    pivot = df_filtrado.pivot_table(index="vencimiento", columns="strike", values="σ", aggfunc="mean")
+    pivot = pivot.sort_index().sort_index(axis=1)
 
-    z_matrix = []
-    for venc in vencimientos:
-        fila = []
-        for strike in strikes:
-            sigma = df_filtrado[
-                (df_filtrado["strike"] == strike) & (df_filtrado["vencimiento"] == venc)
-            ]["σ"].mean()
-            fila.append(sigma if pd.notnull(sigma) else None)
-        z_matrix.append(fila)
+    if pivot.isnull().all().all():
+        return go.Figure(), html.Div("⚠️ No hay superficie válida para graficar.")
 
     fig = go.Figure(data=[go.Surface(
-        z=z_matrix,
-        x=strikes,
-        y=vencimientos,
+        z=pivot.values,
+        x=pivot.columns,      # strike
+        y=pivot.index,        # vencimiento
         colorscale='Viridis'
     )])
 
@@ -150,7 +142,6 @@ def update_surface(tipo, fecha):
 
     return fig, tabla
 
-
-# --- 5. Run the server
+# --- 5. Ejecutar servidor
 if __name__ == '__main__':
     app.run_server(host='0.0.0.0', port=8050, debug=False)

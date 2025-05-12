@@ -80,7 +80,6 @@ def serve_layout():
 
 app.layout = serve_layout
 
-# --- 4. Callback para actualizar gráfica y tabla
 @app.callback(
     Output('vol-surface-graph', 'figure'),
     Output('data-table', 'children'),
@@ -89,23 +88,39 @@ app.layout = serve_layout
 )
 def update_surface(tipo, fecha):
     df_actualizado = cargar_datos_desde_api()
-    df_filtrado = df_actualizado[(df_actualizado['tipo'] == tipo) & (df_actualizado['fecha'] == fecha)]
-    df_filtrado = df_filtrado[df_filtrado["σ"] > 1.0]
+
+    # Filtrar opciones válidas
+    df_filtrado = df_actualizado[
+        (df_actualizado['tipo'] == tipo) &
+        (df_actualizado['fecha'] == fecha) &
+        (df_actualizado['strike'].notna()) &
+        (df_actualizado['σ'].notna()) &
+        (df_actualizado['vencimiento'].notna())
+    ].copy()
+
+    # Convertir vencimiento a datetime
+    df_filtrado["vencimiento"] = pd.to_datetime(df_filtrado["vencimiento"], errors="coerce")
+    df_filtrado = df_filtrado.dropna(subset=["vencimiento"])
 
     if df_filtrado.empty:
         return go.Figure(), html.Div("⚠️ No hay datos para la combinación seleccionada.")
 
-    # Crear matriz con pivot_table
-    pivot = df_filtrado.pivot_table(index="vencimiento", columns="strike", values="σ", aggfunc="mean")
-    pivot = pivot.sort_index().sort_index(axis=1)
+    # Crear matriz de σ por vencimiento y strike
+    pivot = df_filtrado.pivot_table(
+        index="vencimiento",
+        columns="strike",
+        values="σ",
+        aggfunc="mean"
+    ).sort_index().sort_index(axis=1)
 
-    if pivot.isnull().all().all():
-        return go.Figure(), html.Div("⚠️ No hay superficie válida para graficar.")
+    # Interpolación lineal 2D (strike y vencimiento)
+    pivot_interp = pivot.interpolate(method='linear', axis=1).interpolate(method='linear', axis=0)
 
+    # Graficar superficie
     fig = go.Figure(data=[go.Surface(
-        z=pivot.values,
-        x=pivot.columns,      # strike
-        y=pivot.index,        # vencimiento
+        z=pivot_interp.values,
+        x=pivot_interp.columns,
+        y=pivot_interp.index,
         colorscale='Viridis'
     )])
 
@@ -119,6 +134,7 @@ def update_surface(tipo, fecha):
         margin=dict(l=0, r=0, t=40, b=0)
     )
 
+    # Tabla de datos inferior
     tabla = html.Div([
         dash_table.DataTable(
             columns=[{"name": col, "id": col} for col in ['fecha', 'vencimiento', 'strike', 'tipo', 'precio', 'σ']],
@@ -131,16 +147,14 @@ def update_surface(tipo, fecha):
                 'fontWeight': 'bold'
             },
             style_data_conditional=[
-                {
-                    'if': {'column_id': 'σ'},
-                    'backgroundColor': '#f0f9ff'
-                }
+                {'if': {'column_id': 'σ'}, 'backgroundColor': '#f0f9ff'}
             ],
             page_size=20
         )
     ])
 
     return fig, tabla
+
 
 # --- 5. Ejecutar servidor
 if __name__ == '__main__':

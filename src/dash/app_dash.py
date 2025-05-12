@@ -89,7 +89,7 @@ app.layout = serve_layout
 def update_surface(tipo, fecha):
     df_actualizado = cargar_datos_desde_api()
 
-    # Filtrar opciones válidas
+    # Filtrar datos válidos
     df_filtrado = df_actualizado[
         (df_actualizado['tipo'] == tipo) &
         (df_actualizado['fecha'] == fecha) &
@@ -98,25 +98,33 @@ def update_surface(tipo, fecha):
         (df_actualizado['vencimiento'].notna())
     ].copy()
 
-    # Convertir vencimiento a datetime
+    # Convertir vencimiento a datetime y filtrar volatilidades > 0.1
     df_filtrado["vencimiento"] = pd.to_datetime(df_filtrado["vencimiento"], errors="coerce")
-    df_filtrado = df_filtrado.dropna(subset=["vencimiento"])
+    df_filtrado = df_filtrado[df_filtrado["σ"] > 0.1]
 
     if df_filtrado.empty:
-        return go.Figure(), html.Div("⚠️ No hay datos para la combinación seleccionada.")
+        return go.Figure(), html.Div("⚠️ No hay datos válidos para la combinación seleccionada.")
 
-    # Crear matriz de σ por vencimiento y strike
+    # Crear malla rectangular (reindexación)
+    strikes_uniformes = np.arange(df_filtrado["strike"].min(), df_filtrado["strike"].max()+1, 100)
+    vencimientos_uniformes = pd.date_range(
+        start=df_filtrado["vencimiento"].min(),
+        end=df_filtrado["vencimiento"].max(),
+        freq="7D"
+    )
+
     pivot = df_filtrado.pivot_table(
         index="vencimiento",
         columns="strike",
         values="σ",
         aggfunc="mean"
-    ).sort_index().sort_index(axis=1)
+    )
 
-    # Interpolación lineal 2D (strike y vencimiento)
-    pivot_interp = pivot.interpolate(method='linear', axis=1).interpolate(method='linear', axis=0)
+    # Reindexar y luego interpolar
+    pivot_uniforme = pivot.reindex(index=vencimientos_uniformes, columns=strikes_uniformes)
+    pivot_interp = pivot_uniforme.interpolate(method='linear', axis=1).interpolate(method='linear', axis=0)
 
-    # Graficar superficie
+    # Crear figura 3D
     fig = go.Figure(data=[go.Surface(
         z=pivot_interp.values,
         x=pivot_interp.columns,
@@ -134,7 +142,7 @@ def update_surface(tipo, fecha):
         margin=dict(l=0, r=0, t=40, b=0)
     )
 
-    # Tabla de datos inferior
+    # Tabla inferior
     tabla = html.Div([
         dash_table.DataTable(
             columns=[{"name": col, "id": col} for col in ['fecha', 'vencimiento', 'strike', 'tipo', 'precio', 'σ']],
@@ -154,6 +162,7 @@ def update_surface(tipo, fecha):
     ])
 
     return fig, tabla
+
 
 
 # --- 5. Ejecutar servidor
